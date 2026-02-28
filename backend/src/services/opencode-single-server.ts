@@ -170,7 +170,7 @@ class OpenCodeServerManager {
           XDG_DATA_HOME: path.join(OPENCODE_SERVER_DIRECTORY, '.opencode/state'),
           XDG_CONFIG_HOME: path.join(OPENCODE_SERVER_DIRECTORY, '.config'),
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
-          BUN_BE_BUN: "0",
+          BUN_BE_BUN: undefined,
         }
     logger.info('OpenCode server environment variables:', JSON.stringify(envVars))
     logger.info(`OpenCode server started with PID ${this.serverPid}`)
