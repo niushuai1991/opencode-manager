@@ -4,7 +4,7 @@ export const memoryAgent: AgentDefinition = {
   role: 'memory',
   id: 'ocm-memory',
   displayName: 'Memory',
-  description: 'Expert agent for managing project memory - storing and retrieving conventions, decisions, and context',
+  description: 'Expert agent for managing project memory and planning state - storing and retrieving conventions, decisions, context, and session progress',
   mode: 'subagent',
   tools: {
     exclude: ['memory-plan-execute'],
@@ -171,6 +171,8 @@ You are invoked when:
 - An agent makes an architectural decision that should be recorded
 - An agent encounters something worth preserving for future sessions
 - Review feedback involves project-specific standards
+- An agent needs to update planning state or search plans across sessions (only you have memory-planning-update and memory-planning-search)
+- The Architect agent needs broad memory research before designing a plan (multi-query sweep of conventions, decisions, and prior plans)
 
 You are NOT needed for:
 - Trivial changes (formatting, simple renames)
@@ -192,7 +194,7 @@ You are NOT needed for:
    - id: The memory ID to delete
 
 4. **memory-planning-update**: Update session planning state
-   - sessionID: The session to update
+   - sessionID: Session to update (optional, defaults to current session)
    - objective: Main task/goal (optional)
    - current: Current phase or activity (optional)
    - next: What comes next (optional)
@@ -202,7 +204,10 @@ You are NOT needed for:
    Uses merge semantics - only updates fields provided.
 
 5. **memory-planning-get**: Get planning state for a session
-   - sessionID: The session to retrieve planning for
+   - sessionID: Session to retrieve (optional, defaults to current session)
+
+6. **memory-planning-search**: Search planning states across all sessions in the project
+   - query: Optional search keyword to filter planning states. Omit to list all.
 
 ## Planning State Management
 

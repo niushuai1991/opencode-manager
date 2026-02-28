@@ -244,7 +244,7 @@ When deduplication triggers, the existing memory's ID is returned instead of cre
 
 ## Tools
 
-The plugin registers eight tools that the AI agent can call:
+The plugin registers nine tools that the AI agent can call:
 
 ### memory-read
 
@@ -320,7 +320,7 @@ Update the session planning state. Uses merge semantics — only updates fields 
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `sessionID` | string | Yes | The session ID |
+| `sessionID` | string | No | Session ID to update. Defaults to the current session if omitted. |
 | `objective` | string | No | The main task/goal |
 | `current` | string | No | Current phase or activity |
 | `next` | string | No | What comes next |
@@ -336,9 +336,19 @@ Retrieve the current planning state for a session.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `sessionID` | string | Yes | The session ID |
+| `sessionID` | string | No | Session ID to retrieve. Defaults to the current session if omitted. |
 
 Returns a formatted view of the planning state including objective, current phase, phases with status icons (`[x]` completed, `[~]` in progress, `[ ]` pending), findings, and errors.
+
+### memory-planning-search
+
+Search planning states across all sessions in the current project. Useful for finding context from prior planning sessions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | No | Keyword to filter planning states. Omit to list all sessions. |
+
+Returns a summary of matching sessions showing session ID, last updated date, objective, current phase, and phase completion progress. Results are ordered by most recently updated.
 
 ### memory-plan-execute
 
@@ -348,8 +358,11 @@ Create a new Code session and send an implementation plan as the first prompt. D
 |-----------|------|----------|-------------|
 | `plan` | string | Yes | The full implementation plan to send to the Code agent |
 | `title` | string | Yes | Short title for the session (shown in session list, max 60 chars) |
+| `objective` | string | No | Short description of what we're building |
+| `phases` | array | No | Phase list from the plan: `[{title, status, notes?}]` |
+| `findings` | array | No | Key architectural decisions discovered during research |
 
-Creates a new session via the OpenCode API, then sends the plan as the first message to the Code agent. Returns the session ID and title. Only the Architect agent has access to this tool — it is excluded from Code and Memory agents.
+Saves planning state (objective, phases, findings) for the Architect session, creates a new session via the OpenCode API, then sends the plan as the first message to the Code agent. Returns the session ID and title. Only the Architect agent has access to this tool — it is excluded from Code and Memory agents.
 
 ---
 
@@ -360,18 +373,18 @@ Planning state is separate from memories. It tracks temporary session progress �
 | Property | Memories | Planning State |
 |----------|----------|----------------|
 | Persistence | Indefinite | 7-day TTL |
-| Scope | Cross-session, semantic search | Single session |
+| Scope | Cross-session, semantic search | Project-scoped, searchable across sessions |
 | Purpose | Durable project knowledge | Task progress tracking |
 | Cleanup | Manual (delete/archive) | Automatic (expired entries removed every 30 minutes) |
 | Compaction snapshot TTL | N/A | 24 hours |
 
-The plugin injects active planning state into compaction context so task progress survives context window resets. After compaction, the Memory agent extracts any durable knowledge from the compaction summary and stores it as memories.
+The plugin injects active planning state into compaction context so task progress survives context window resets. After compaction, the Memory agent extracts any durable knowledge from the compaction summary and stores it as memories. Planning states are project-scoped and searchable across sessions using `memory-planning-search`.
 
 ---
 
 ## Agents
 
-The plugin registers three agents that are configured into OpenCode:
+The plugin registers four agents that are configured into OpenCode:
 
 ### Code Agent (primary)
 
@@ -387,7 +400,9 @@ The Code agent's system prompt instructs it to:
 - Check for duplicates with `memory-read` before writing new memories
 - Update stale memories with `memory-edit` rather than creating duplicates
 
-The Code agent does not have access to `memory-plan-execute` — only the Architect agent can create implementation sessions.
+Code and Architect agents do not have direct access to `memory-planning-update` or `memory-planning-search` — these tools are exclusive to the Memory subagent. To update planning state or search across sessions, the Code agent delegates to @Memory via the Task tool.
+
+The Code agent does not have access to `memory-plan-execute`, `memory-planning-update`, or `memory-planning-search`. It delegates planning operations to the @Memory subagent and can only read its own session's planning state via `memory-planning-get`.
 
 ### Memory Agent (subagent)
 
@@ -403,10 +418,11 @@ The Memory agent handles:
 - Curation: merging duplicates, archiving outdated entries
 - Planning state management after compaction events
 - Post-compaction knowledge extraction (invoked automatically via SubtaskPart)
+- Planning state management: updating phase progress, searching plans across sessions (exclusive access to `memory-planning-update` and `memory-planning-search`)
 
 The Memory agent receives planning state directly in its subtask prompt — it does NOT call `memory-planning-get`. This eliminates an extra LLM round-trip and makes extraction deterministic.
 
-The Memory agent does not have access to `memory-plan-execute`.
+The Memory agent has access to `memory-planning-search` for cross-session planning context lookup. It does not have access to `memory-plan-execute`.
 
 ### Architect Agent (primary)
 
@@ -421,9 +437,26 @@ The Architect agent follows a Research → Design → Plan → Execute workflow:
 1. **Research** — Reads relevant files, searches the codebase, checks memory for conventions and decisions
 2. **Design** — Considers approaches, weighs tradeoffs, asks clarifying questions
 3. **Plan** — Presents a structured plan with objectives, phases, decisions, conventions, and key context
-4. **Execute** — When the user approves, calls `memory-plan-execute` to create a new Code session with the full plan
+4. **Execute** — When the user approves, calls `memory-plan-execute` with the plan, objective, phases, and findings. Planning state is saved automatically before the plan is dispatched to the Code agent.
 
 The Architect is the only agent with access to the `memory-plan-execute` tool. Plans must be fully self-contained since the Code agent receiving them has no access to the Architect's conversation.
+
+When `memory-plan-execute` runs, it automatically appends a planning instruction to the plan telling the Code agent to update the Architect session's planning state as it progresses through phases. It also updates the Architect session's planning state to reflect that the plan has been dispatched.
+
+The Architect agent does not have direct access to `memory-planning-update` or `memory-planning-search`. It delegates broad memory research to the @Memory subagent and reads its own session's planning state via `memory-planning-get`.
+
+### Code Review Agent (subagent)
+
+- **Display name:** `Code Review`
+- **Mode:** `subagent`
+- **Temperature:** 0.0 (deterministic)
+- **Role:** Convention-aware code reviewer with memory access
+
+The Code Review agent is a read-only subagent invoked by other agents via the Task tool to review diffs, commits, branches, or PRs. It checks changes against stored project conventions and decisions, then returns a structured review summary with issues (bug/warning/suggestion) and observations.
+
+The agent can read memory (`memory-read`) and planning state (`memory-planning-get`, `memory-planning-search`, `memory-planning-update`) but cannot write, edit, or delete memories. It also cannot execute plans — `memory-plan-execute`, `memory-write`, `memory-edit`, and `memory-delete` are excluded.
+
+The `/review` slash command triggers this agent as a subtask with the template: "Review the current code changes."
 
 ### Built-in Agent Enhancements
 
@@ -431,7 +464,7 @@ The plugin also modifies built-in OpenCode agents:
 
 | Agent | Enhancement |
 |-------|-------------|
-| `plan` | Gets access to `memory-read`, `memory-planning-update`, and `memory-planning-get` tools |
+| `plan` | Gets access to `memory-read`, `memory-planning-update`, `memory-planning-get`, and `memory-planning-search` tools |
 | `build` | Hidden (replaced by the Code agent) |
 
 The default agent is set to `Code`.
@@ -478,6 +511,15 @@ The core compaction hook that fires when a session is about to be compacted. It 
 6. **Snapshot storage** — Saves a pre-compaction snapshot (planning state, branch, timestamp) to session state for the next compaction cycle
 
 7. **Diagnostics** — Appends a summary line showing how many planning phases, conventions, decisions, and tokens were injected
+
+### experimental.chat.messages.transform
+
+Injects a read-only enforcement reminder into user messages when the Architect agent is active:
+
+1. Scans messages to find the last user message
+2. If the message is addressed to the Architect agent, appends a synthetic `<system-reminder>` part
+3. The reminder instructs the agent that plan mode is active and it must not make file edits or run non-readonly tools
+4. This provides message-level enforcement on top of the agent's `edit: { '*': 'deny' }` permission config
 
 ---
 

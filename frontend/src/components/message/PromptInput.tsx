@@ -9,6 +9,7 @@ import { useSessionAgent } from '@/hooks/useSessionAgent'
 import { useSTT } from '@/hooks/useSTT'
 
 import { useUserBash } from '@/stores/userBashStore'
+import { useSessionAgentStore } from '@/stores/sessionAgentStore'
 import { useMobile } from '@/hooks/useMobile'
 
 import { usePermissions } from '@/contexts/EventContext'
@@ -193,13 +194,15 @@ export const PromptInput = memo(forwardRef<PromptInputHandle, PromptInputProps>(
 
     if (hasActiveStream) {
       const parts = parsePromptToParts(prompt, attachedFiles, imageAttachments)
+      const agentUsed = selectedAgent || currentMode
       sendPrompt.mutate({
         sessionID,
         parts,
         model: currentModel,
-        agent: selectedAgent || currentMode,
+        agent: agentUsed,
         variant: currentVariant
       })
+      setStoredAgent(sessionID, agentUsed)
       setPrompt('')
       setAttachedFiles(new Map())
       revokeBlobUrls(imageAttachments)
@@ -217,6 +220,7 @@ export const PromptInput = memo(forwardRef<PromptInputHandle, PromptInputProps>(
         command,
         agent: currentMode
       })
+      setStoredAgent(sessionID, currentMode)
       setPrompt('')
       setIsBashMode(false)
       clearSTT()
@@ -239,15 +243,17 @@ export const PromptInput = memo(forwardRef<PromptInputHandle, PromptInputProps>(
     }
 
     const parts = parsePromptToParts(prompt, attachedFiles, imageAttachments)
+    const agentUsed = selectedAgent || currentMode
 
     sendPrompt.mutate({
       sessionID,
       parts,
       model: currentModel,
-      agent: selectedAgent || currentMode,
+      agent: agentUsed,
       variant: currentVariant
     })
 
+    setStoredAgent(sessionID, agentUsed)
     setPrompt('')
     setAttachedFiles(new Map())
     revokeBlobUrls(imageAttachments)
@@ -278,6 +284,7 @@ export const PromptInput = memo(forwardRef<PromptInputHandle, PromptInputProps>(
         if (textareaRef.current) {
           textareaRef.current.focus()
           textareaRef.current.setSelectionRange(cleanedTemplate.length, cleanedTemplate.length)
+          textareaRef.current.scrollTop = textareaRef.current.scrollHeight
         }
       }, 0)
     } else {
@@ -296,6 +303,7 @@ export const PromptInput = memo(forwardRef<PromptInputHandle, PromptInputProps>(
             const newCursorPos = beforeCommand.length + command.name.length + 2
             textareaRef.current.focus()
             textareaRef.current.setSelectionRange(newCursorPos, newCursorPos)
+            textareaRef.current.scrollTop = textareaRef.current.scrollHeight
           }
         }, 0)
       }
@@ -318,6 +326,7 @@ export const PromptInput = memo(forwardRef<PromptInputHandle, PromptInputProps>(
           const newCursorPos = beforeMention.length + item.value.length + 2
           textareaRef.current.focus()
           textareaRef.current.setSelectionRange(newCursorPos, newCursorPos)
+          textareaRef.current.scrollTop = textareaRef.current.scrollHeight
         }
       }, 0)
     } else {
@@ -345,6 +354,7 @@ export const PromptInput = memo(forwardRef<PromptInputHandle, PromptInputProps>(
           const newCursorPos = beforeMention.length + filename.length + 2
           textareaRef.current.focus()
           textareaRef.current.setSelectionRange(newCursorPos, newCursorPos)
+          textareaRef.current.scrollTop = textareaRef.current.scrollHeight
         }
       }, 0)
     }
@@ -356,6 +366,7 @@ export const PromptInput = memo(forwardRef<PromptInputHandle, PromptInputProps>(
 
   const handleAgentChange = (agent: string) => {
     setLocalMode(agent)
+    setStoredAgent(sessionID, agent)
   }
 
   const handleVoiceToggle = async () => {
@@ -718,6 +729,7 @@ if (isIOS && isSecureContext && navigator.clipboard && navigator.clipboard.read)
 
   const sessionAgent = useSessionAgent(opcodeUrl, sessionID, directory)
   const currentMode = localMode ?? sessionAgent.agent
+  const setStoredAgent = useSessionAgentStore((s) => s.setAgent)
 
 const { model, modelString } = useModelSelection(opcodeUrl, directory)
   const currentModel = modelString || ''
@@ -806,7 +818,7 @@ return (
       )}
 
       <div className="flex gap-1.5 md:gap-2 items-center justify-between">
-        <div className="flex gap-1.5 md:gap-2 items-center">
+        <div className="flex gap-1.5 md:gap-2 items-center min-w-0">
           <AgentQuickSelect
             opcodeUrl={opcodeUrl}
             directory={directory}
