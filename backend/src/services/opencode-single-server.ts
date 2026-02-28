@@ -162,15 +162,7 @@ class OpenCodeServerManager {
 
     let stderrOutput = ''
 
-    this.serverProcess = spawn(
-      'opencode',
-      ['serve', '--port', OPENCODE_SERVER_PORT.toString(), '--hostname', OPENCODE_SERVER_HOST],
-      {
-        cwd: OPENCODE_SERVER_DIRECTORY,
-        detached: !isDevelopment,
-        stdio: isDevelopment ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-        env: {
-          BUN_BE_BUN: "0",
+    let envVars = {
           ...process.env,
           ...gitEnv,
           ...gitIdentityEnv,
@@ -178,7 +170,18 @@ class OpenCodeServerManager {
           XDG_DATA_HOME: path.join(OPENCODE_SERVER_DIRECTORY, '.opencode/state'),
           XDG_CONFIG_HOME: path.join(OPENCODE_SERVER_DIRECTORY, '.config'),
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
+          BUN_BE_BUN: undefined,
         }
+    logger.info('OpenCode server environment variables:', JSON.stringify(envVars))
+    logger.info(`OpenCode server started with PID ${this.serverPid}`)
+    this.serverProcess = spawn(
+      'opencode',
+      ['serve', '--port', OPENCODE_SERVER_PORT.toString(), '--hostname', OPENCODE_SERVER_HOST],
+      {
+        cwd: OPENCODE_SERVER_DIRECTORY,
+        detached: !isDevelopment,
+        stdio: isDevelopment ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+        env: envVars,
       }
     )
 
