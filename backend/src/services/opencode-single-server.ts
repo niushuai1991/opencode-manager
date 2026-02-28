@@ -170,6 +170,7 @@ class OpenCodeServerManager {
         detached: !isDevelopment,
         stdio: isDevelopment ? 'inherit' : ['ignore', 'pipe', 'pipe'],
         env: {
+          BUN_BE_BUN: "0",
           ...process.env,
           ...gitEnv,
           ...gitIdentityEnv,
@@ -177,7 +178,6 @@ class OpenCodeServerManager {
           XDG_DATA_HOME: path.join(OPENCODE_SERVER_DIRECTORY, '.opencode/state'),
           XDG_CONFIG_HOME: path.join(OPENCODE_SERVER_DIRECTORY, '.config'),
           OPENCODE_CONFIG: OPENCODE_CONFIG_PATH,
-          BUN_BE_BUN: "0",
         }
       }
     )
