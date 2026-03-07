@@ -1,11 +1,15 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
+import type { ComboboxOption } from '@/components/ui/combobox'
+import { getProviders } from '@/api/providers'
+import { useModelStore } from '@/stores/modelStore'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { ChevronDown, ChevronRight, Save, Loader2, Database, Brain, AlertCircle, RefreshCw, Play } from 'lucide-react'
+import { ChevronDown, ChevronRight, Save, Loader2, Database, Brain, AlertCircle, RefreshCw, Play, Cpu, FileText, Layers, Syringe, MessageSquare } from 'lucide-react'
 import { getPluginConfig, updatePluginConfig, reindexMemories, testEmbeddingConfig } from '@/api/memory'
 import { FetchError } from '@/api/fetchWrapper'
 import { settingsApi } from '@/api/settings'
@@ -41,6 +45,54 @@ export function MemoryPluginConfig({ memoryPluginEnabled, onToggle }: MemoryPlug
     enabled: memoryPluginEnabled && expanded,
   })
 
+  const { data: providersData } = useQuery({
+    queryKey: ['providers-for-execution-model'],
+    queryFn: getProviders,
+    staleTime: 60000,
+    enabled: memoryPluginEnabled && expanded,
+  })
+
+  const recentModels = useModelStore((s) => s.recentModels)
+
+  const executionModelOptions = useMemo<ComboboxOption[]>(() => {
+    if (!providersData?.providers) return []
+
+    const connectedProviders = providersData.providers.filter((p) => p.isConnected)
+
+    const recentSet = new Set<string>()
+    const recentOptions: ComboboxOption[] = []
+
+    for (const recent of recentModels) {
+      const modelValue = `${recent.providerID}/${recent.modelID}`
+      const provider = connectedProviders.find((p) => p.id === recent.providerID)
+      const model = provider?.models[recent.modelID]
+      if (!model || !provider) continue
+      recentSet.add(modelValue)
+      recentOptions.push({
+        value: modelValue,
+        label: model.name || model.id,
+        description: provider.name,
+        group: 'Recent',
+      })
+    }
+
+    const providerOptions: ComboboxOption[] = []
+    for (const provider of connectedProviders.sort((a, b) => a.name.localeCompare(b.name))) {
+      for (const [modelId, model] of Object.entries(provider.models)) {
+        const modelValue = `${provider.id}/${modelId}`
+        if (recentSet.has(modelValue)) continue
+        providerOptions.push({
+          value: modelValue,
+          label: model.name || model.id,
+          description: modelId,
+          group: provider.name,
+        })
+      }
+    }
+
+    return [...recentOptions, ...providerOptions]
+  }, [providersData, recentModels])
+
   const config = data?.config
   const [localConfig, setLocalConfig] = useState<PluginConfig | null>(null)
 
@@ -52,25 +104,22 @@ export function MemoryPluginConfig({ memoryPluginEnabled, onToggle }: MemoryPlug
 
   const handleProviderChange = (provider: EmbeddingProviderType) => {
     if (!localConfig && !config) return
+    const current = localConfig ?? config!
     const defaults = DEFAULT_CONFIGS[provider]
     setLocalConfig({
+      ...current,
       embedding: {
         provider,
         model: defaults.model,
         dimensions: defaults.dimensions,
       },
-      dedupThreshold: config?.dedupThreshold ?? 0.25,
     })
   }
 
   const updateMutation = useMutation({
     mutationFn: updatePluginConfig,
     onSuccess: (data) => {
-      showToast.success('Memory plugin configuration saved')
       queryClient.setQueryData(['memory-plugin-config'], { config: data.config })
-    },
-    onError: () => {
-      showToast.error('Failed to save configuration')
     },
   })
 
@@ -112,15 +161,19 @@ export function MemoryPluginConfig({ memoryPluginEnabled, onToggle }: MemoryPlug
 
   const handleSave = async () => {
     if (!localConfig) return
+    showToast.loading('Saving configuration...', { id: 'memory-save' })
     updateMutation.mutate(localConfig, {
       onSuccess: async () => {
-        showToast.loading('Restarting OpenCode server...', { id: 'memory-restart' })
+        showToast.loading('Restarting OpenCode server...', { id: 'memory-save' })
         try {
           await settingsApi.restartOpenCodeServer()
-          showToast.success('Configuration saved and server restarted', { id: 'memory-restart' })
+          showToast.success('Configuration saved and server restarted', { id: 'memory-save' })
         } catch {
-          showToast.error('Failed to restart server', { id: 'memory-restart' })
+          showToast.error('Failed to restart server', { id: 'memory-save' })
         }
+      },
+      onError: () => {
+        showToast.error('Failed to save configuration', { id: 'memory-save' })
       },
     })
   }
@@ -131,6 +184,22 @@ export function MemoryPluginConfig({ memoryPluginEnabled, onToggle }: MemoryPlug
       ...(localConfig ?? config!),
       embedding: {
         ...(localConfig?.embedding ?? config!.embedding),
+        [field]: value === '' ? undefined : value,
+      },
+    })
+  }
+
+  const handleNestedChange = <K extends 'logging' | 'compaction' | 'memoryInjection' | 'messagesTransform'>(
+    section: K,
+    field: string,
+    value: string | number | boolean | undefined,
+  ) => {
+    if (!localConfig && !config) return
+    const current = localConfig ?? config!
+    setLocalConfig({
+      ...current,
+      [section]: {
+        ...current[section],
         [field]: value === '' ? undefined : value,
       },
     })
@@ -262,40 +331,234 @@ export function MemoryPluginConfig({ memoryPluginEnabled, onToggle }: MemoryPlug
                       </div>
                     </>
                   )}
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <RefreshCw className="h-4 w-4 text-purple-500" />
+                      <span className="text-sm font-medium">Reindex</span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleReindex}
+                      disabled={reindexMutation.isPending}
+                      className="w-full justify-start"
+                    >
+                      {reindexMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                      )}
+                      Reindex
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      Regenerate embeddings for all memories
+                    </p>
+                  </div>
                 </div>
               </div>
 
-              <div className="space-y-4 border-t pt-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Database className="h-4 w-4 text-green-500" />
-                  <span className="text-sm font-medium">Storage</span>
+              <div className="grid gap-4 md:grid-cols-2 border-t pt-4">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Database className="h-4 w-4 text-green-500" />
+                    <span className="text-sm font-medium">Storage</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="dedupThreshold">Deduplication Threshold</Label>
+                    <div className="flex items-center gap-4">
+                      <input
+                        id="dedupThreshold"
+                        type="range"
+                        min="0"
+                        max="0.4"
+                        step="0.05"
+                        value={displayConfig.dedupThreshold ?? 0.25}
+                        onChange={(e) => {
+                          setLocalConfig({
+                            ...displayConfig,
+                            dedupThreshold: parseFloat(e.target.value),
+                          })
+                        }}
+                        className="flex-1"
+                      />
+                      <span className="text-sm text-muted-foreground w-12">
+                        {(displayConfig.dedupThreshold ?? 0.25).toFixed(2)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Lower values = more aggressive deduplication (0.0 - 0.4)
+                    </p>
+                  </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="dedupThreshold">Deduplication Threshold</Label>
-                  <div className="flex items-center gap-4">
-                    <input
-                      id="dedupThreshold"
-                      type="range"
-                      min="0"
-                      max="0.4"
-                      step="0.05"
-                      value={displayConfig.dedupThreshold ?? 0.25}
-                      onChange={(e) => {
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Cpu className="h-4 w-4 text-orange-500" />
+                    <span className="text-sm font-medium">Plan Execution</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="executionModel">Execution Model</Label>
+                    <Combobox
+                      value={displayConfig.executionModel ?? ''}
+                      onChange={(value) => {
                         setLocalConfig({
                           ...displayConfig,
-                          dedupThreshold: parseFloat(e.target.value),
+                          executionModel: value || undefined,
                         })
                       }}
-                      className="flex-1"
+                      options={executionModelOptions}
+                      placeholder="default model"
+                      allowCustomValue
+                      showClear
                     />
-                    <span className="text-sm text-muted-foreground w-12">
-                      {(displayConfig.dedupThreshold ?? 0.25).toFixed(2)}
-                    </span>
+                    <p className="text-xs text-muted-foreground">
+                      Model used when executing plans from the Architect. Format: provider/model. Leave empty to use the current session's model.
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Lower values = more aggressive deduplication (0.0 - 0.4)
-                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 border-t pt-4">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <FileText className="h-4 w-4 text-yellow-500" />
+                    <span className="text-sm font-medium">Logging</span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="loggingEnabled">Enabled</Label>
+                    <Switch
+                      id="loggingEnabled"
+                      checked={displayConfig.logging?.enabled ?? false}
+                      onCheckedChange={(checked) => handleNestedChange('logging', 'enabled', checked)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="loggingDebug">Debug</Label>
+                    <Switch
+                      id="loggingDebug"
+                      checked={displayConfig.logging?.debug ?? false}
+                      onCheckedChange={(checked) => handleNestedChange('logging', 'debug', checked)}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="loggingFile">Log File</Label>
+                    <Input
+                      id="loggingFile"
+                      value={displayConfig.logging?.file ?? ''}
+                      onChange={(e) => handleNestedChange('logging', 'file', e.target.value)}
+                      placeholder="Path to log file"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Layers className="h-4 w-4 text-cyan-500" />
+                    <span className="text-sm font-medium">Compaction</span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="customPrompt">Custom Prompt</Label>
+                    <Switch
+                      id="customPrompt"
+                      checked={displayConfig.compaction?.customPrompt ?? true}
+                      onCheckedChange={(checked) => handleNestedChange('compaction', 'customPrompt', checked)}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="maxContextTokens">Max Context Tokens</Label>
+                    <Input
+                      id="maxContextTokens"
+                      type="number"
+                      value={displayConfig.compaction?.maxContextTokens ?? 4000}
+                      onChange={(e) => handleNestedChange('compaction', 'maxContextTokens', e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                      placeholder="4000"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 border-t pt-4">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Syringe className="h-4 w-4 text-pink-500" />
+                    <span className="text-sm font-medium">Memory Injection</span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="injectionEnabled">Enabled</Label>
+                    <Switch
+                      id="injectionEnabled"
+                      checked={displayConfig.memoryInjection?.enabled ?? true}
+                      onCheckedChange={(checked) => handleNestedChange('memoryInjection', 'enabled', checked)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="injectionDebug">Debug</Label>
+                    <Switch
+                      id="injectionDebug"
+                      checked={displayConfig.memoryInjection?.debug ?? false}
+                      onCheckedChange={(checked) => handleNestedChange('memoryInjection', 'debug', checked)}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="injectionMaxTokens">Max Tokens</Label>
+                    <Input
+                      id="injectionMaxTokens"
+                      type="number"
+                      value={displayConfig.memoryInjection?.maxTokens ?? 2000}
+                      onChange={(e) => handleNestedChange('memoryInjection', 'maxTokens', e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                      placeholder="2000"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="cacheTtlMs">Cache TTL (ms)</Label>
+                    <Input
+                      id="cacheTtlMs"
+                      type="number"
+                      value={displayConfig.memoryInjection?.cacheTtlMs ?? 30000}
+                      onChange={(e) => handleNestedChange('memoryInjection', 'cacheTtlMs', e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                      placeholder="30000"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      How long injected memories are cached before re-querying
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <MessageSquare className="h-4 w-4 text-teal-500" />
+                    <span className="text-sm font-medium">Messages Transform</span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="transformEnabled">Enabled</Label>
+                    <Switch
+                      id="transformEnabled"
+                      checked={displayConfig.messagesTransform?.enabled ?? true}
+                      onCheckedChange={(checked) => handleNestedChange('messagesTransform', 'enabled', checked)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="transformDebug">Debug</Label>
+                    <Switch
+                      id="transformDebug"
+                      checked={displayConfig.messagesTransform?.debug ?? false}
+                      onCheckedChange={(checked) => handleNestedChange('messagesTransform', 'debug', checked)}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -305,31 +568,6 @@ export function MemoryPluginConfig({ memoryPluginEnabled, onToggle }: MemoryPlug
                   <Input value={displayConfig.dataDir} disabled className="text-muted-foreground text-xs" />
                 </div>
               )}
-
-              <div className="space-y-4 border-t pt-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <RefreshCw className="h-4 w-4 text-purple-500" />
-                    <span className="text-sm font-medium">Reindex</span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleReindex}
-                    disabled={reindexMutation.isPending}
-                  >
-                    {reindexMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                    ) : (
-                      <RefreshCw className="h-4 w-4 mr-1" />
-                    )}
-                    Reindex
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Regenerate embeddings for all memories. Use when changing embedding model or if embeddings are missing.
-                </p>
-              </div>
 
               <div className="flex items-center justify-between pt-2">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
