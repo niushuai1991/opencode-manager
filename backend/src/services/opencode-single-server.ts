@@ -372,6 +372,11 @@ class OpenCodeServerManager {
     this.lastStartupError = null
   }
 
+  async reinitializeBinDirectory(): Promise<void> {
+    logger.info('Reinitializing OpenCode bin directory')
+    await this.initializeOpencodeBinDirectory()
+  }
+
   async checkHealth(): Promise<boolean> {
     try {
       const response = await fetch(`http://${OPENCODE_SERVER_HOST}:${OPENCODE_SERVER_PORT}/doc`, {
