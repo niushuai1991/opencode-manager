@@ -1,5 +1,6 @@
 import { spawn, execSync } from 'child_process'
 import path from 'path'
+import { promises as fs } from 'fs'
 import { logger } from '../utils/logger'
 import { createGitEnv, createGitIdentityEnv, resolveGitIdentity } from '../utils/git-auth'
 import type { GitCredential } from '@opencode-manager/shared'
@@ -160,6 +161,9 @@ class OpenCodeServerManager {
 
     logger.info(`OpenCode server GIT_SSH_COMMAND: ${gitSshCommand}`)
 
+    // Initialize OpenCode bin directory before starting the server
+    await this.initializeOpencodeBinDirectory()
+
     let stderrOutput = ''
 
     this.serverProcess = spawn(
@@ -258,6 +262,46 @@ class OpenCodeServerManager {
       await cleanupPersistentSSHKeys()
     } catch (error) {
       logger.warn('Failed to cleanup persistent SSH keys:', error)
+    }
+  }
+
+  private async initializeOpencodeBinDirectory(): Promise<void> {
+    const binDir = path.join(
+      OPENCODE_SERVER_DIRECTORY,
+      '.opencode',
+      'state',
+      'opencode',
+      'bin'
+    )
+
+    const packageJsonPath = path.join(binDir, 'package.json')
+
+    try {
+      // Create bin directory
+      await fs.mkdir(binDir, { recursive: true })
+
+      // Check if package.json already exists
+      const packageJsonExists = await fs.access(packageJsonPath).then(() => true).catch(() => false)
+
+      if (!packageJsonExists) {
+        // Initialize with bun init -y to create an independent package.json
+        // This prevents Bun from finding parent package.json when OpenCode installs LSP servers
+        try {
+          execSync('bun init -y', {
+            cwd: binDir,
+            stdio: 'inherit',
+            timeout: 30000  // 30 second timeout
+          })
+          logger.info('OpenCode bin directory initialized successfully')
+        } catch (error) {
+          logger.error('bun init failed:', error)
+          throw new Error(`bun init failed: ${error}`)
+        }
+      }
+
+    } catch (error) {
+      logger.error('Failed to initialize OpenCode bin directory:', error)
+      // Don't block OpenCode startup, just log the error
     }
   }
 
